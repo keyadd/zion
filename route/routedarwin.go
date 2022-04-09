@@ -10,7 +10,7 @@ import (
 
 var Gateway string
 
-func Route(tunName string, tunDns string, tunGw string, addr string, c chan os.Signal) {
+func Route(tunName string, tunDns string, tunGw string, addr string) {
 	physicalIface, localGateway, _ := utils.GetPhysicalInterface()
 	//fmt.Println(localGateway)
 	Gateway = localGateway
@@ -19,23 +19,25 @@ func Route(tunName string, tunDns string, tunGw string, addr string, c chan os.S
 		log.Println("route net.ResolveIPAddr", err)
 	}
 	serverIP := ip.String()
-	log.Println(physicalIface)
+	log.Println(localGateway)
 	//log.Printf("tunName %s , tunDns %s , tunGw %s , serverIp %s localGateway %s \n", tunName, tunDns, tunGw, serverIP, localGateway)
 	if physicalIface != "" {
 		execCmd("route", "add", serverIP, localGateway)
-		execCmd("route", "add", tunDns, localGateway)
-		execCmd("route", "add", "0.0.0.0/1", "-interface", tunName)
-		execCmd("route", "add", "128.0.0.0/1", "-interface", tunName)
-		execCmd("route", "add", "13.251.188.177", "-interface", tunName)
+		//execCmd("route", "add", tunDns, localGateway)
+		//execCmd("route", "add", "0.0.0.0/1", "-interface", tunName)
+		//execCmd("route", "add", "128.0.0.0/1", "-interface", tunName)
+		//execCmd("route", "add", "-host", "1.1.1.1", "dev", tunName)
+		//execCmd("route", "add", "13.251.188.177", "-interface", tunName)
+		execCmd("route", "delete", "0.0.0.0")
 		execCmd("route", "add", "default", tunGw)
-		execCmd("route", "change", "default", tunGw)
+		//execCmd("route", "change", "default", tunGw)
 	}
 }
 
 func RetractRoute() {
 	//fmt.Println(Gateway)
+	execCmd("route", "delete", "0.0.0.0")
 	execCmd("route", "add", "default", Gateway)
-	execCmd("route", "change", "default", Gateway)
 }
 
 func execCmd(c string, args ...string) {

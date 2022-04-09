@@ -10,7 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"zion.com/zion/conn/websocket"
+	"zion.com/zion/conn/ws"
 	"zion.com/zion/route"
 )
 
@@ -49,22 +49,15 @@ var client = &cobra.Command{
 
 		fmt.Println("client called")
 
-		if conf.Client.Type == "ws" {
-			if globalBool == false {
-				//websocket.StartClient(conf.Client)
-			} else if globalBool == true {
+		if globalBool == false {
+			ws.StartClient(conf.Client, globalBool)
+		} else if globalBool == true {
 
-				websocket.StartClient(conf.Client, c)
-				//路由脚本执行sh
-
-			} else {
-				fmt.Println("输入参数错误")
-			}
-
-		} else if conf.Client.Type == "grpc" {
+			ws.StartClient(conf.Client, globalBool)
+			//路由脚本执行sh
 
 		} else {
-			fmt.Println("error")
+			fmt.Println("输入参数错误")
 		}
 
 	},

@@ -6,7 +6,7 @@ package cmd
 
 import (
 	"fmt"
-	"zion.com/zion/conn/websocket"
+	"zion.com/zion/conn/ws"
 
 	"github.com/spf13/cobra"
 )
@@ -18,7 +18,7 @@ var server = &cobra.Command{
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("server called")
-		websocket.StartServer(conf.Server)
+		ws.StartServer(conf.Server)
 	},
 }
 
