@@ -30,6 +30,8 @@ func Route(tunName string, tunDns string, tunGw string, addr string) {
 		//execCmd("route", "add", "13.251.188.177", "-interface", tunName)
 		execCmd("route", "delete", "0.0.0.0")
 		execCmd("route", "add", "default", tunGw)
+		execCmd("killall", "-HUP", "mDNSResponder")
+		execCmd("dscacheutil", "-flushcache")
 		//execCmd("route", "change", "default", tunGw)
 	}
 }
@@ -38,6 +40,8 @@ func RetractRoute() {
 	//fmt.Println(Gateway)
 	execCmd("route", "delete", "0.0.0.0")
 	execCmd("route", "add", "default", Gateway)
+	execCmd("killall", "-HUP", "mDNSResponder")
+	execCmd("dscacheutil", "-flushcache")
 }
 
 func execCmd(c string, args ...string) {

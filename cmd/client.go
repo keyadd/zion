@@ -65,7 +65,9 @@ var client = &cobra.Command{
 
 func ExitFunc() {
 	fmt.Println("开始退出...")
-	route.RetractRoute()
+	if globalBool == true {
+		route.RetractRoute()
+	}
 	os.Exit(0)
 }
 func init() {

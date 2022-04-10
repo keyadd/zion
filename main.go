@@ -10,7 +10,7 @@ import (
 func main() {
 	cmd.Execute()
 
-	logFile, err := os.OpenFile("./log/fatal.log", os.O_CREATE|os.O_APPEND|os.O_RDWR, 0660)
+	logFile, err := os.OpenFile("./zion.log", os.O_CREATE|os.O_APPEND|os.O_RDWR, 0660)
 	if err != nil {
 		log.Println("服务启动出错", "打开异常日志文件失败", err)
 		return
