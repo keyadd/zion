@@ -20,6 +20,8 @@ type Server struct {
 	mutex   sync.Mutex      // 避免重复关闭管道
 	config  config.Server   //配置文件
 	cidr    string          //客户端 ip
+	encrypt bool            //客户端 ip
+
 }
 
 var upgrader = websocket.Upgrader{
@@ -46,12 +48,11 @@ func StartServer(config config.Server) {
 		log.Fatalf("failed to open tun device: %v", err)
 	}
 	tunDevice = tunDev
-	log.Printf("zion ws server started on %s,TunAddr is %v", addr, config.TunAddr)
 
 	//写连接
 	http.HandleFunc(config.Path, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(config.Path)
-		Handler(config, w, r)
+		go Handler(config, w, r)
 	})
 
 	log.Printf("zion ws server start")
@@ -62,38 +63,49 @@ func StartServer(config config.Server) {
 
 func Handler(config config.Server, w http.ResponseWriter, r *http.Request) {
 	cidr := r.Header.Get("addr")
+	encrypt := r.Header.Get("encrypt")
+	fmt.Println(encrypt)
+	var ch bool = false
+
 	wsConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	conn := &Server{
-		config:  config,
-		wSocket: wsConn,
-		cidr:    cidr,
+		config: config,
+		cidr:   cidr,
 	}
-	//serverConn[cidr+pathNode] = wsConn
+	if encrypt == "1" {
+		conn.encrypt = true
+	} else {
+		conn.encrypt = false
+	}
+	fmt.Println(conn.encrypt)
 	serverConn.Store(cidr, wsConn)
-	go conn.tunToWs()
-	go conn.wsToTun()
+	go conn.wsToTun(&ch)
+
+	go conn.tunToWs(&ch)
+
 }
 
-func (s *Server) tunToWs() {
+func (s *Server) tunToWs(ch *bool) {
 	defer func() {
-		s.mutex.Lock()
-		s.wSocket.Close()
-		s.mutex.Unlock()
-
-		serverConn.Delete(s.cidr)
+		//serverConn.Delete(s.cidr)
+		fmt.Println("退出成功2")
 
 	}()
 
-	buffer := make([]byte, 10000)
+	buf := make([]byte, 10000)
 	for {
-		n, err := tunDevice.Read(buffer)
+		fmt.Println(*ch)
+		if *ch == true {
+			break
+		}
+		n, err := tunDevice.Read(buf)
 		if err != nil || err == io.EOF || n == 0 {
 			continue
 		}
-		b := buffer[:n]
+		b := buf[:n]
 		if !waterutil.IsIPv4(b) {
 			continue
 		}
@@ -101,48 +113,40 @@ func (s *Server) tunToWs() {
 		if srcIPv4 == "" || dstIPv4 == "" {
 			continue
 		}
-		//log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
+		log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
 
 		//加密代码块
 		//var encoding []byte
-		if s.config.Encrypt == true {
-			//b = utils.PswEncrypt(b)
+		//fmt.Println(b)
+		if s.encrypt == true {
+			b = utils.PswEncrypt(b)
 		}
+
+		//fmt.Println(b)
 
 		conn, ok := serverConn.Load(dstIPv4)
 		if !ok {
-			continue
+			break
 		}
 		s.mutex.Lock()
 		err = conn.(*websocket.Conn).WriteMessage(websocket.BinaryMessage, b)
+		s.mutex.Unlock()
 
 		if err != nil {
 			log.Println("c.wsSocket.WriteMessage error= ", err)
 			break
 		}
-		s.mutex.Unlock()
 
 	}
-}
-
-func (s *Server) Loop() {
-	load, _ := serverConn.Load(s.cidr)
-	s.mutex.Lock()
-	if err := (load).(*websocket.Conn).WriteMessage(websocket.BinaryMessage, []byte("pong")); err != nil {
-		fmt.Println("server heartbeat fail")
-	}
-	s.mutex.Unlock()
 }
 
 //###################################################################读连接############################################
 
-func (s *Server) wsToTun() {
+func (s *Server) wsToTun(ch *bool) {
 	defer func() {
-
+		*ch = true
 		serverConn.Delete(s.cidr)
-		s.mutex.Lock()
-		s.wSocket.Close()
-		s.mutex.Unlock()
+		fmt.Println("退出成功1")
 	}()
 	for {
 		load, _ := serverConn.Load(s.cidr)
@@ -153,9 +157,12 @@ func (s *Server) wsToTun() {
 
 		//解密代码块
 		//var decoding []byte
-		if s.config.Encrypt == true {
-			//b = utils.PswDecrypt(b)
+		fmt.Println(b)
+		fmt.Println(s.encrypt)
+		if s.encrypt == true {
+			b = utils.PswDecrypt(b)
 		}
+		fmt.Println(b)
 
 		//if string(b) == "ping" {
 		//	fmt.Println(string(b))
@@ -171,7 +178,7 @@ func (s *Server) wsToTun() {
 		if srcIPv4 == "" || dstIPv4 == "" {
 			continue
 		}
-		//log.Printf("srcIPv4: %s wsToTun dstIPv4: %s\n", srcIPv4, dstIPv4)
+		log.Printf("srcIPv4: %s wsToTun dstIPv4: %s\n", srcIPv4, dstIPv4)
 
 		_, err = tunDevice.Write(b)
 		if err != nil {

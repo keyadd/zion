@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"zion.com/zion/utils"
 )
 
-type ICMP struct {
+type Icmp struct {
 	Type        uint8
 	Code        uint8
 	Checksum    uint16
@@ -33,7 +34,12 @@ type Client struct {
 	config   config.Client      //全局配置文件
 }
 
+var wg sync.WaitGroup
+
 func StartClient(config config.Client, globalBool bool) {
+
+	runtime.GOMAXPROCS(2)
+	wg.Add(2)
 
 	dnsServers := strings.Split(config.TunDns, ",")
 	//客户端新建虚拟网卡方法
@@ -54,22 +60,18 @@ func StartClient(config config.Client, globalBool bool) {
 
 	go conn.wsToTun()
 	go conn.tunToWs()
-	go conn.LoopIcmp()
 
+	go conn.LoopIcmp()
 	if globalBool == true {
 		route.Route(config.TunName, config.TunDns, config.TunGw, config.Addr)
 	}
 
 	log.Printf("zion ws client started,TunAddr is %v", config.TunAddr)
-
-	select {}
-
+	wg.Wait()
 }
 
 func (c *Client) LoopIcmp() {
-	defer c.wsSocket.Close()
 	var (
-		icmp  ICMP
 		laddr net.IPAddr = net.IPAddr{IP: net.ParseIP(c.config.TunAddr)} //***IP地址改成你自己的网段***
 		raddr net.IPAddr = net.IPAddr{IP: net.ParseIP(c.config.TunGw)}
 	)
@@ -79,12 +81,14 @@ func (c *Client) LoopIcmp() {
 		return
 	}
 	defer conn.Close()
-	icmp.Type = 8 //8->echo message  0->reply message
-	icmp.Code = 0
-	icmp.Checksum = 0
-	icmp.Identifier = 0
-	icmp.SequenceNum = 0
 
+	icmp := Icmp{
+		Type:        8,
+		Code:        0,
+		Checksum:    0,
+		Identifier:  0,
+		SequenceNum: 0,
+	}
 	var (
 		buffer bytes.Buffer
 	)
@@ -107,7 +111,11 @@ func (c *Client) LoopIcmp() {
 
 //从tun网卡读取到包 根据配置是否加密 发送到服务端
 func (c *Client) tunToWs() {
-	defer c.wsSocket.Close()
+	defer func() {
+		c.wsSocket.Close()
+		//route.RetractRoute()
+		wg.Done()
+	}()
 
 	packet := make([]byte, 10000)
 	for {
@@ -123,34 +131,38 @@ func (c *Client) tunToWs() {
 		if srcIPv4 == "" || dstIPv4 == "" {
 			continue
 		}
+
 		//log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
 		if c.config.Encrypt {
-			//b = utils.XOR(b)
+			b = utils.PswEncrypt(b)
 		}
 		c.mutex.Lock()
 		err = c.wsSocket.WriteMessage(websocket.BinaryMessage, b)
-
+		c.mutex.Unlock()
 		if err != nil {
 			log.Println("Conn.wsSocket.WriteMessage : ", err)
 			break
 		}
-		c.mutex.Unlock()
 
 	}
 }
 
 //从服务端获取到是否加密的包 然后解密 发送给tun虚拟网卡
 func (c *Client) wsToTun() {
-	defer c.wsSocket.Close()
+	defer func() {
+		c.wsSocket.Close()
+		//route.RetractRoute()
+		wg.Done()
+
+	}()
 	for {
 		//c.mutex.Lock()
 		_, b, err := c.wsSocket.ReadMessage()
 		if err != nil || err == io.EOF {
 			break
 		}
-
-		if string(b) == "pong" {
-			fmt.Println(string(b))
+		if c.config.Encrypt {
+			b = utils.PswDecrypt(b)
 		}
 		//c.mutex.Unlock()
 		if !waterutil.IsIPv4(b) {
@@ -163,9 +175,6 @@ func (c *Client) wsToTun() {
 		}
 		//log.Printf("srcIPv4: %s wsToTun dstIPv4: %s\n", srcIPv4, dstIPv4)
 
-		if c.config.Encrypt {
-			//b = utils.XOR(b)
-		}
 		c.iface.Write(b)
 	}
 }

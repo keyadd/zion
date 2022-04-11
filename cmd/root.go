@@ -49,7 +49,7 @@ func init() {
 		log.Println("v.Unmarshal(&conf)", err)
 		return
 	}
-	log.Println(conf.Server)
+	//log.Println(conf.Server)
 	log.Println(conf.Client)
 	rootCmd.CompletionOptions.DisableDescriptions = true
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
