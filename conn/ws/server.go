@@ -1,11 +1,14 @@
 package ws
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/songgao/water/waterutil"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,11 +19,10 @@ import (
 )
 
 type Server struct {
-	wSocket *websocket.Conn // 底层websocket
-	mutex   sync.Mutex      // 避免重复关闭管道
-	config  config.Server   //配置文件
-	cidr    string          //客户端 ip
-	encrypt bool            //客户端 ip
+	mutex   sync.Mutex    // 避免重复关闭管道
+	config  config.Server //配置文件
+	cidr    string        //客户端 ip
+	encrypt bool          //客户端 ip
 
 }
 
@@ -32,7 +34,7 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-var serverConn sync.Map //make(map[string]*websocket.Conn)
+var serverConn sync.Map
 
 var tunDevice io.ReadWriteCloser
 
@@ -52,7 +54,8 @@ func StartServer(config config.Server) {
 	//写连接
 	http.HandleFunc(config.Path, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(config.Path)
-		go Handler(config, w, r)
+
+		Handler(config, w, r)
 	})
 
 	log.Printf("zion ws server start")
@@ -64,8 +67,6 @@ func StartServer(config config.Server) {
 func Handler(config config.Server, w http.ResponseWriter, r *http.Request) {
 	cidr := r.Header.Get("addr")
 	encrypt := r.Header.Get("encrypt")
-	fmt.Println(encrypt)
-	var ch bool = false
 
 	wsConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -82,23 +83,50 @@ func Handler(config config.Server, w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Println(conn.encrypt)
 	serverConn.Store(cidr, wsConn)
-	go conn.wsToTun(&ch)
+	go conn.wsToTun()
 
-	go conn.tunToWs(&ch)
+	go conn.tunToWs()
 
 }
 
-func (s *Server) tunToWs(ch *bool) {
-	defer func() {
-		//serverConn.Delete(s.cidr)
-		fmt.Println("退出成功2")
+// LoopIcmp 发送一个无返回的icmp包,来安排 tunToWs 退出
+func (s *Server) LoopIcmp() {
+	conn, err := net.Dial("ip4:icmp", s.cidr)
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+	defer conn.Close()
+	icmp := Icmp{
+		Type:        8,
+		Code:        0,
+		Checksum:    0,
+		Identifier:  0,
+		SequenceNum: 0,
+	}
+	var (
+		buffer bytes.Buffer
+	)
+	//发送一个单独的 icmp包 ,无icmp返回包
+	binary.Write(&buffer, binary.BigEndian, icmp)
 
+	if _, err := conn.Write(buffer.Bytes()); err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+	return
+
+}
+
+func (s *Server) tunToWs() {
+	defer func() {
+		fmt.Println("exit tunToWs")
 	}()
 
 	buf := make([]byte, 10000)
 	for {
-		fmt.Println(*ch)
-		if *ch == true {
+		_, ok := serverConn.Load(s.cidr)
+		if !ok {
 			break
 		}
 		n, err := tunDevice.Read(buf)
@@ -113,16 +141,12 @@ func (s *Server) tunToWs(ch *bool) {
 		if srcIPv4 == "" || dstIPv4 == "" {
 			continue
 		}
-		log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
+		//log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
 
 		//加密代码块
-		//var encoding []byte
-		//fmt.Println(b)
 		if s.encrypt == true {
-			b = utils.PswEncrypt(b)
+			b = utils.EncryptChacha1305(b, s.config.Key)
 		}
-
-		//fmt.Println(b)
 
 		conn, ok := serverConn.Load(dstIPv4)
 		if !ok {
@@ -130,45 +154,37 @@ func (s *Server) tunToWs(ch *bool) {
 		}
 		s.mutex.Lock()
 		err = conn.(*websocket.Conn).WriteMessage(websocket.BinaryMessage, b)
-		s.mutex.Unlock()
 
 		if err != nil {
 			log.Println("c.wsSocket.WriteMessage error= ", err)
 			break
 		}
+		s.mutex.Unlock()
 
 	}
 }
 
 //###################################################################读连接############################################
 
-func (s *Server) wsToTun(ch *bool) {
+func (s *Server) wsToTun() {
 	defer func() {
-		*ch = true
 		serverConn.Delete(s.cidr)
-		fmt.Println("退出成功1")
+		s.LoopIcmp()
+
+		fmt.Println("exit wsToTun")
 	}()
 	for {
 		load, _ := serverConn.Load(s.cidr)
 		_, b, err := (load).(*websocket.Conn).ReadMessage()
 		if err != nil || err == io.EOF {
+
 			break
 		}
 
 		//解密代码块
-		//var decoding []byte
-		fmt.Println(b)
-		fmt.Println(s.encrypt)
 		if s.encrypt == true {
-			b = utils.PswDecrypt(b)
+			b = utils.DecryptChacha1305(b, s.config.Key)
 		}
-		fmt.Println(b)
-
-		//if string(b) == "ping" {
-		//	fmt.Println(string(b))
-		//	go s.Loop()
-		//
-		//}
 
 		if !waterutil.IsIPv4(b) {
 			continue
@@ -178,7 +194,7 @@ func (s *Server) wsToTun(ch *bool) {
 		if srcIPv4 == "" || dstIPv4 == "" {
 			continue
 		}
-		log.Printf("srcIPv4: %s wsToTun dstIPv4: %s\n", srcIPv4, dstIPv4)
+		//log.Printf("srcIPv4: %s wsToTun dstIPv4: %s\n", srcIPv4, dstIPv4)
 
 		_, err = tunDevice.Write(b)
 		if err != nil {

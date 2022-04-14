@@ -27,7 +27,6 @@ func ClientConn(config config.Client) (*websocket.Conn, error) {
 	header.Set("addr", config.TunAddr)
 	header.Set("encrypt", encrypt)
 	fmt.Println(url)
-	fmt.Println(encrypt)
 	c, _, err := websocket.DefaultDialer.Dial(url, header)
 	if err != nil {
 		log.Printf("[client] failed to dial websocket %v", err)

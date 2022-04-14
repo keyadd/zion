@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"github.com/songgao/water/waterutil"
+	"golang.org/x/crypto/chacha20poly1305"
 	"log"
 	"net"
 	"strings"
@@ -71,6 +73,83 @@ func isPhysicalInterface(addr string) bool {
 	return false
 }
 
+// =================== chacha20poly1305 ======================
+
+// EncryptChacha1305 加密
+func EncryptChacha1305(origData []byte, key string) (encrypted []byte) {
+	newKey := sha256.Sum256([]byte(key))
+
+	aead, _ := chacha20poly1305.New(newKey[:])
+
+	nonce := make([]byte, chacha20poly1305.NonceSize)
+
+	encrypted = aead.Seal(nil, nonce, origData, nil)
+	return encrypted
+}
+
+// DecryptChacha1305 解密
+func DecryptChacha1305(encrypted []byte, key string) (decrypted []byte) {
+	newKey := sha256.Sum256([]byte(key))
+
+	aead, _ := chacha20poly1305.New(newKey[:])
+
+	nonce := make([]byte, chacha20poly1305.NonceSize)
+
+	decrypted, _ = aead.Open(nil, nonce, encrypted, nil)
+	return decrypted
+}
+
+// =================== ECB ======================
+
+// AesEncryptECB 加密
+func AesEncryptECB(origData []byte, key []byte) (encrypted []byte) {
+	cipher, _ := aes.NewCipher(generateKey(key))
+	length := (len(origData) + aes.BlockSize) / aes.BlockSize
+	plain := make([]byte, length*aes.BlockSize)
+	copy(plain, origData)
+	pad := byte(len(plain) - len(origData))
+	for i := len(origData); i < len(plain); i++ {
+		plain[i] = pad
+	}
+	encrypted = make([]byte, len(plain))
+	// 分组分块加密
+	for bs, be := 0, cipher.BlockSize(); bs <= len(origData); bs, be = bs+cipher.BlockSize(), be+cipher.BlockSize() {
+		cipher.Encrypt(encrypted[bs:be], plain[bs:be])
+	}
+
+	return encrypted
+}
+
+// AesDecryptECB 解密
+func AesDecryptECB(encrypted []byte, key []byte) (decrypted []byte) {
+	cipher, _ := aes.NewCipher(generateKey(key))
+	decrypted = make([]byte, len(encrypted))
+	//
+	for bs, be := 0, cipher.BlockSize(); bs < len(encrypted); bs, be = bs+cipher.BlockSize(), be+cipher.BlockSize() {
+		cipher.Decrypt(decrypted[bs:be], encrypted[bs:be])
+	}
+
+	trim := 0
+	if len(decrypted) > 0 {
+		trim = len(decrypted) - int(decrypted[len(decrypted)-1])
+	}
+
+	return decrypted[:trim]
+}
+
+func generateKey(key []byte) (genKey []byte) {
+	genKey = make([]byte, 16)
+	copy(genKey, key)
+	for i := 16; i < len(key); {
+		for j := 0; j < 16 && i < len(key); j, i = j+1, i+1 {
+			genKey[j] ^= key[i]
+		}
+	}
+	return genKey
+}
+
+// =================== CBC ======================
+
 const (
 	sKey        = "1234567890000000"
 	ivParameter = "dde4b1f8a9e6b814"
@@ -78,7 +157,7 @@ const (
 
 var Data string
 
-//加密
+// PswEncrypt 加密
 func PswEncrypt(src []byte) []byte {
 	key := []byte(sKey)
 	iv := []byte(ivParameter)
@@ -91,7 +170,7 @@ func PswEncrypt(src []byte) []byte {
 	return []byte(base64.RawStdEncoding.EncodeToString(result))
 }
 
-//解密
+// PswDecrypt 解密
 func PswDecrypt(src []byte) []byte {
 
 	key := []byte(sKey)

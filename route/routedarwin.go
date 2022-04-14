@@ -19,7 +19,7 @@ func Route(tunName string, tunDns string, tunGw string, addr string) {
 		log.Println("route net.ResolveIPAddr", err)
 	}
 	serverIP := ip.String()
-	log.Println(localGateway)
+	//log.Println(localGateway)
 	//log.Printf("tunName %s , tunDns %s , tunGw %s , serverIp %s localGateway %s \n", tunName, tunDns, tunGw, serverIP, localGateway)
 	if physicalIface != "" {
 		execCmd("route", "add", serverIP, localGateway)

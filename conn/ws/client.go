@@ -67,15 +67,12 @@ func StartClient(config config.Client, globalBool bool) {
 	}
 
 	log.Printf("zion ws client started,TunAddr is %v", config.TunAddr)
-	wg.Wait()
+	//wg.Wait()
+	select {}
 }
 
 func (c *Client) LoopIcmp() {
-	var (
-		laddr net.IPAddr = net.IPAddr{IP: net.ParseIP(c.config.TunAddr)} //***IP地址改成你自己的网段***
-		raddr net.IPAddr = net.IPAddr{IP: net.ParseIP(c.config.TunGw)}
-	)
-	conn, err := net.DialIP("ip4:icmp", &laddr, &raddr)
+	conn, err := net.Dial("ip4:icmp", c.config.TunGw)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
@@ -100,7 +97,7 @@ func (c *Client) LoopIcmp() {
 	binary.Write(&buffer, binary.BigEndian, icmp)
 
 	for {
-		time.Sleep(30 * time.Second)
+		time.Sleep(20 * time.Second)
 		if _, err := conn.Write(buffer.Bytes()); err != nil {
 			fmt.Println(err.Error())
 			break
@@ -114,7 +111,7 @@ func (c *Client) tunToWs() {
 	defer func() {
 		c.wsSocket.Close()
 		//route.RetractRoute()
-		wg.Done()
+		//wg.Done()
 	}()
 
 	packet := make([]byte, 10000)
@@ -124,6 +121,10 @@ func (c *Client) tunToWs() {
 			continue
 		}
 		b := packet[:n]
+
+		//if b == nil {
+		//	continue
+		//}
 		if !waterutil.IsIPv4(b) {
 			continue
 		}
@@ -133,16 +134,18 @@ func (c *Client) tunToWs() {
 		}
 
 		//log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
+		//加密代码
 		if c.config.Encrypt {
-			b = utils.PswEncrypt(b)
+			b = utils.EncryptChacha1305(b, c.config.Key)
 		}
 		c.mutex.Lock()
 		err = c.wsSocket.WriteMessage(websocket.BinaryMessage, b)
-		c.mutex.Unlock()
+
 		if err != nil {
 			log.Println("Conn.wsSocket.WriteMessage : ", err)
 			break
 		}
+		c.mutex.Unlock()
 
 	}
 }
@@ -152,7 +155,7 @@ func (c *Client) wsToTun() {
 	defer func() {
 		c.wsSocket.Close()
 		//route.RetractRoute()
-		wg.Done()
+		//wg.Done()
 
 	}()
 	for {
@@ -161,10 +164,16 @@ func (c *Client) wsToTun() {
 		if err != nil || err == io.EOF {
 			break
 		}
+
+		//解密代码
 		if c.config.Encrypt {
-			b = utils.PswDecrypt(b)
+			b = utils.DecryptChacha1305(b, c.config.Key)
 		}
 		//c.mutex.Unlock()
+
+		if b == nil {
+			continue
+		}
 		if !waterutil.IsIPv4(b) {
 			continue
 		}
