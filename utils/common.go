@@ -22,6 +22,24 @@ func GetIPv4(b []byte) (srcIPv4 string, dstIPv4 string) {
 	return "", ""
 }
 
+func GetIP(b []byte) (src string, dst string) {
+
+	if IsIPv4(b) {
+		if waterutil.IPv4Protocol(b) == waterutil.TCP || waterutil.IPv4Protocol(b) == waterutil.UDP || waterutil.IPv4Protocol(b) == waterutil.ICMP {
+			src := IPv4Header(b).Src().String()
+			dst := IPv4Header(b).Dst().String()
+			return src, dst
+		}
+		return "", ""
+	} else if IsIPv6(b) {
+		src := IPv6Header(b).Src().String()
+		dst := IPv6Header(b).Dst().String()
+		return src, dst
+	} else {
+		return "", ""
+	}
+}
+
 func GetPhysicalInterface() (name string, gateway string, network string) {
 	ifaces := getAllPhysicalInterfaces()
 	if len(ifaces) == 0 {
@@ -244,4 +262,19 @@ func PKCS5UnPadding(origData []byte) []byte {
 	// 去掉最后一个字节 unpadding 次
 	unpadding := int(origData[length-1])
 	return origData[:(length - unpadding)]
+}
+
+func IsIP(ip string) bool {
+	if strings.Contains(ip, "/") {
+		netIP, _, err := net.ParseCIDR(ip)
+		if err != nil {
+			return false
+		}
+		return netIP.To4() != nil
+	}
+	netIP := net.ParseIP(ip)
+	if netIP == nil {
+		return false
+	}
+	return netIP.To4() != nil
 }

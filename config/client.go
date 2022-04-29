@@ -1,11 +1,11 @@
 package config
 
 type Client struct {
-	TunName string `mapstructure:"tunName" json:"tunName" yaml:"tunName"` //tun 名称
-	TunAddr string `mapstructure:"tunAddr" json:"tunAddr" yaml:"tunAddr"` //tun虚拟网卡的地址
-	TunGw   string `mapstructure:"tunGw" json:"tunGw" yaml:"tunGw"`       //tun虚拟网卡的网关
-	TunMask string `mapstructure:"tunMask" json:"tunMask" yaml:"tunMask"` //tun子网掩码
-	TunDns  string `mapstructure:"tunDns" json:"tunDns" yaml:"tunDns"`    //tun DNS 地址
+	Name    string `mapstructure:"name" json:"name" yaml:"name"`          //tun 名称
+	V4Addr  string `mapstructure:"v4Addr" json:"v4Addr" yaml:"v4Addr"`    //tun虚拟网卡的地址
+	V4Gw    string `mapstructure:"v4Gw" json:"v4Gw" yaml:"v4Gw"`          //tun虚拟网卡的网关
+	V4Mask  string `mapstructure:"v4Mask" json:"v4Mask" yaml:"v4Mask"`    //tun子网掩码
+	Dns     string `mapstructure:"dns" json:"dns" yaml:"dns"`             //tun DNS 地址
 	Type    string `mapstructure:"type" json:"type" yaml:"type"`          //选择隧道类型
 	Path    string `mapstructure:"path" json:"path" yaml:"path"`          //http websocket 站点目录
 	Addr    string `mapstructure:"addr" json:"addr" yaml:"addr"`          //客户端连接的服务器地址

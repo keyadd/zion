@@ -5,12 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/gorilla/websocket"
-	"github.com/songgao/water/waterutil"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"zion.com/zion/config"
@@ -19,11 +17,11 @@ import (
 )
 
 type Server struct {
-	mutex   sync.Mutex    // 避免重复关闭管道
-	config  config.Server //配置文件
-	cidr    string        //客户端 ip
-	encrypt bool          //客户端 ip
-
+	mutex     sync.Mutex    // 避免重复关闭管道
+	config    config.Server //配置文件
+	cidr      string        //客户端 ip
+	encrypt   bool          //客户端 ip
+	tunDevice io.ReadWriteCloser
 }
 
 var upgrader = websocket.Upgrader{
@@ -36,35 +34,30 @@ var upgrader = websocket.Upgrader{
 
 var serverConn sync.Map
 
-var tunDevice io.ReadWriteCloser
-
-//
+// StartServer 启动方法
 func StartServer(config config.Server) {
 
-	addr := "0.0.0.0:" + strconv.Itoa(config.Port)
-	dnsServers := strings.Split(config.TunDns, ",")
+	dnsServers := strings.Split(config.Dns, ",")
 
 	//开启虚拟网卡方法
-	tunDev, err := tun.OpenTunDevice(config.TunName, config.TunAddr, config.TunGw, config.TunMask, dnsServers)
+	tunDev, err := tun.OpenTunDevice(config.Name, config.V4Addr, config.V4Gw, config.V4Mask, dnsServers)
 	if err != nil {
 		log.Fatalf("failed to open tun device: %v", err)
 	}
-	tunDevice = tunDev
 
 	//写连接
 	http.HandleFunc(config.Path, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(config.Path)
-
-		Handler(config, w, r)
+		Handler(tunDev, config, w, r)
 	})
 
 	log.Printf("zion ws server start")
-	http.ListenAndServe(addr, nil)
+	http.ListenAndServe(config.Port, nil)
 }
 
 //#########################################################写连接##########################################################
 
-func Handler(config config.Server, w http.ResponseWriter, r *http.Request) {
+func Handler(tunDevice io.ReadWriteCloser, config config.Server, w http.ResponseWriter, r *http.Request) {
 	cidr := r.Header.Get("addr")
 	encrypt := r.Header.Get("encrypt")
 
@@ -73,20 +66,103 @@ func Handler(config config.Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn := &Server{
-		config: config,
-		cidr:   cidr,
+		config:    config,
+		cidr:      cidr,
+		tunDevice: tunDevice,
 	}
 	if encrypt == "1" {
 		conn.encrypt = true
 	} else {
 		conn.encrypt = false
 	}
-	fmt.Println(conn.encrypt)
+	fmt.Println(conn.cidr)
 	serverConn.Store(cidr, wsConn)
 	go conn.wsToTun()
 
 	go conn.tunToWs()
 
+}
+
+func (s *Server) tunToWs() {
+	defer func() {
+		fmt.Println("exit tunToWs")
+	}()
+
+	buf := make([]byte, 10000)
+	for {
+		_, ok := serverConn.Load(s.cidr)
+		if !ok {
+
+			break
+		}
+		n, err := s.tunDevice.Read(buf)
+		if err != nil || err == io.EOF || n == 0 {
+			continue
+		}
+		b := buf[:n]
+
+		src, dst := utils.GetIP(b)
+		if src == "" || dst == "" {
+			continue
+		}
+		//log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
+
+		//加密代码块
+		if s.encrypt == true {
+			b = utils.EncryptChacha1305(b, s.config.Key)
+		}
+
+		conn, ok := serverConn.Load(dst)
+		if !ok {
+			continue
+		}
+		s.mutex.Lock()
+		err = conn.(*websocket.Conn).WriteMessage(websocket.BinaryMessage, b)
+
+		if err != nil {
+			log.Println("c.wsSocket.WriteMessage error= ", err)
+			break
+		}
+		s.mutex.Unlock()
+
+	}
+}
+
+//###################################################################读连接############################################
+
+func (s *Server) wsToTun() {
+	defer func() {
+		serverConn.Delete(s.cidr)
+		s.LoopIcmp()
+
+		fmt.Println("exit wsToTun")
+	}()
+	for {
+		load, _ := serverConn.Load(s.cidr)
+		_, b, err := (load).(*websocket.Conn).ReadMessage()
+		if err != nil || err == io.EOF {
+			break
+		}
+
+		//解密代码块
+		if s.encrypt == true {
+			b = utils.DecryptChacha1305(b, s.config.Key)
+		}
+
+		src, dst := utils.GetIP(b)
+		if src == "" || dst == "" {
+			continue
+		}
+
+		//log.Printf("srcIPv4: %s wsToTun dstIPv4: %s\n", src, dst)
+
+		_, err = s.tunDevice.Write(b)
+		if err != nil {
+			log.Println("iface.Write error= ", err)
+			break
+		}
+
+	}
 }
 
 // LoopIcmp 发送一个无返回的icmp包,来安排 tunToWs 退出
@@ -116,91 +192,4 @@ func (s *Server) LoopIcmp() {
 	}
 	return
 
-}
-
-func (s *Server) tunToWs() {
-	defer func() {
-		fmt.Println("exit tunToWs")
-	}()
-
-	buf := make([]byte, 10000)
-	for {
-		_, ok := serverConn.Load(s.cidr)
-		if !ok {
-			break
-		}
-		n, err := tunDevice.Read(buf)
-		if err != nil || err == io.EOF || n == 0 {
-			continue
-		}
-		b := buf[:n]
-		if !waterutil.IsIPv4(b) {
-			continue
-		}
-		srcIPv4, dstIPv4 := utils.GetIPv4(b)
-		if srcIPv4 == "" || dstIPv4 == "" {
-			continue
-		}
-		//log.Printf("srcIPv4: %s tunToWs dstIPv4: %s\n", srcIPv4, dstIPv4)
-
-		//加密代码块
-		if s.encrypt == true {
-			b = utils.EncryptChacha1305(b, s.config.Key)
-		}
-
-		conn, ok := serverConn.Load(dstIPv4)
-		if !ok {
-			break
-		}
-		s.mutex.Lock()
-		err = conn.(*websocket.Conn).WriteMessage(websocket.BinaryMessage, b)
-
-		if err != nil {
-			log.Println("c.wsSocket.WriteMessage error= ", err)
-			break
-		}
-		s.mutex.Unlock()
-
-	}
-}
-
-//###################################################################读连接############################################
-
-func (s *Server) wsToTun() {
-	defer func() {
-		serverConn.Delete(s.cidr)
-		s.LoopIcmp()
-
-		fmt.Println("exit wsToTun")
-	}()
-	for {
-		load, _ := serverConn.Load(s.cidr)
-		_, b, err := (load).(*websocket.Conn).ReadMessage()
-		if err != nil || err == io.EOF {
-
-			break
-		}
-
-		//解密代码块
-		if s.encrypt == true {
-			b = utils.DecryptChacha1305(b, s.config.Key)
-		}
-
-		if !waterutil.IsIPv4(b) {
-			continue
-		}
-
-		srcIPv4, dstIPv4 := utils.GetIPv4(b)
-		if srcIPv4 == "" || dstIPv4 == "" {
-			continue
-		}
-		//log.Printf("srcIPv4: %s wsToTun dstIPv4: %s\n", srcIPv4, dstIPv4)
-
-		_, err = tunDevice.Write(b)
-		if err != nil {
-			log.Println("iface.Write error= ", err)
-			break
-		}
-
-	}
 }

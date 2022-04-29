@@ -1,17 +1,21 @@
-package ws
+package h2
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
-	"github.com/gorilla/websocket"
 	"github.com/tatsushid/go-fastping"
+	"golang.org/x/net/http2"
 	"io"
 	"log"
 	"net"
-	"runtime"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 	"zion.com/zion/config"
+	"zion.com/zion/conn/h2/conn"
 	"zion.com/zion/route"
 	"zion.com/zion/tun"
 	"zion.com/zion/utils"
@@ -26,19 +30,87 @@ type Icmp struct {
 }
 
 type Client struct {
-	wsSocket *websocket.Conn    // 底层websocket
+	h2Socket *conn.Conn         // http2 连接
 	mutex    sync.Mutex         // 避免重复关闭管道
 	iface    io.ReadWriteCloser //tun 虚拟网卡的接口
 	config   config.Client      //全局配置文件
 	routes   bool               //是否退出是清空路由配置
+	Client   *http.Client
+
+	Method string
+	// Header enables sending custom headers to the server
+	Header http.Header
 }
 
 var gLocker sync.Mutex    //全局锁
 var gCondition *sync.Cond //全局条件变量
 
-func StartClient(config config.Client, globalBool bool) {
+func (c *Client) Connect(ctx context.Context, config config.Client) (*conn.Conn, *http.Response, error) {
 
-	runtime.GOMAXPROCS(2)
+	scheme := "http"
+	if config.TLS == true {
+		scheme = "https"
+	}
+	encrypt := "0"
+	if config.Encrypt == true {
+		encrypt = "1"
+	}
+	header := make(http.Header)
+	//url := u.String() // + "?host=" + url.QueryEscape(config.TunAddr)
+	header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36")
+	header.Set("addr", config.V4Addr)
+	header.Set("encrypt", encrypt)
+
+	reader, writer := io.Pipe()
+	u := url.URL{Scheme: scheme, Host: config.Addr, Path: config.Path}
+	fmt.Println(u.String())
+	c.Method = http.MethodPost
+	// Create a request object to send to the server
+	req, err := http.NewRequest(c.Method, u.String(), reader)
+
+	if err != nil {
+		fmt.Println(err)
+		return nil, nil, err
+	}
+	c.Header = header
+
+	// Apply custom headers
+	if c.Header != nil {
+		req.Header = c.Header
+	}
+	//req.Close = true
+
+	// Apply given context to the sent request
+	req = req.WithContext(ctx)
+
+	// If an http client was not defined, use the default http client
+	httpClient := c.Client
+	if httpClient == nil {
+		httpClient = defaultClient.Client
+	}
+
+	// Perform the request
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return nil, nil, err
+	}
+
+	// Create a connection
+	conn, ctx := conn.NewConn(req.Context(), resp.Body, writer)
+
+	// Apply the connection context on the request context
+	resp.Request = req.WithContext(ctx)
+
+	return conn, resp, nil
+}
+
+var defaultClient = Client{
+	Method: http.MethodPost,
+	Client: &http.Client{Transport: &http2.Transport{}},
+}
+
+func StartClient(config config.Client, globalBool bool) {
 
 	dnsServers := strings.Split(config.Dns, ",")
 	//客户端新建虚拟网卡方法
@@ -47,23 +119,34 @@ func StartClient(config config.Client, globalBool bool) {
 		log.Fatalf("failed to open tun device: %v", err)
 	}
 	//客户端连接服务端方法
-	wsSocket, err := utils.WsConn(config)
-	if err != nil {
-		//gCondition.Signal()
-		fmt.Println(err)
-		return
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d := &Client{
+		Client: &http.Client{
+			Transport: &http2.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		},
 	}
-	conn := &Client{
-		wsSocket: wsSocket,
+
+	h2Socket, _, err := d.Connect(ctx, config)
+	if err != nil {
+		log.Fatalf("Initiate conn: %s", err)
+	}
+	//defer h2Socket.Close()
+	fmt.Println(h2Socket)
+
+	c := &Client{
+		h2Socket: h2Socket,
 		config:   config,
 		iface:    tunDev,
 	}
 	gLocker.Lock()
 	gCondition = sync.NewCond(&gLocker)
-	go conn.tunToWs()
-	go conn.wsToTun()
+	go c.tunToWs()
+	go c.wsToTun()
 
-	go conn.LoopPing()
+	go c.LoopPing()
 	if globalBool == true {
 		err = route.Route(config.Name, config.Dns, config.V4Gw, config.Addr)
 		if err != nil {
@@ -122,7 +205,7 @@ func (c *Client) LoopPing() {
 func (c *Client) tunToWs() {
 	defer func() {
 		fmt.Println("exit tunToWs")
-		c.wsSocket.Close()
+		//c.h2Socket.ReadCloser.Close()
 		gCondition.Signal()
 		//route.RetractRoute()
 		//wg.Done()
@@ -130,6 +213,7 @@ func (c *Client) tunToWs() {
 
 	packet := make([]byte, 10000)
 	for {
+
 		n, err := c.iface.Read(packet)
 		if err != nil || n == 0 {
 			continue
@@ -147,8 +231,7 @@ func (c *Client) tunToWs() {
 			b = utils.EncryptChacha1305(b, c.config.Key)
 		}
 		c.mutex.Lock()
-		err = c.wsSocket.WriteMessage(websocket.BinaryMessage, b)
-
+		_, err = c.h2Socket.Write(b)
 		if err != nil {
 			log.Println("Conn.wsSocket.WriteMessage : ", err)
 			break
@@ -163,14 +246,16 @@ func (c *Client) wsToTun() {
 	defer func() {
 
 		fmt.Println("exit wsToTun")
-		c.wsSocket.Close()
+		//c.h2Socket.WriteCloser.Close()
 		gCondition.Signal()
 
 	}()
+	b := make([]byte, 10000)
 	for {
+
 		//c.mutex.Lock()
-		_, b, err := c.wsSocket.ReadMessage()
-		if err != nil || err == io.EOF {
+		_, err := c.h2Socket.Read(b)
+		if err != nil {
 			fmt.Println(err)
 			break
 		}

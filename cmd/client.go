@@ -10,14 +10,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	h2client "zion.com/zion/conn/h2"
 	"zion.com/zion/conn/ws"
 	"zion.com/zion/route"
 )
 
 //var Config *config.Client
 
-var globalBool bool
-var chinaBool bool
+var globalBool bool //全局代理
+var chinaBool bool  //绕开中国
 
 // zion vpn start client
 var client = &cobra.Command{
@@ -27,6 +28,7 @@ var client = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 
 		c := make(chan os.Signal)
+
 		//监听指定信号 ctrl+c kill
 		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2)
 
@@ -47,15 +49,24 @@ var client = &cobra.Command{
 			}
 		}()
 
-		fmt.Println("client called")
-
 		if globalBool == false {
-			ws.StartClient(conf.Client, globalBool)
+			if conf.Client.Type == "ws" {
+				ws.StartClient(conf.Client, globalBool)
+			} else if conf.Client.Type == "h2" {
+				h2client.StartClient(conf.Client, globalBool)
+			} else {
+				fmt.Println("请输入正确的类型")
+			}
+
 		} else if globalBool == true {
 
-			ws.StartClient(conf.Client, globalBool)
-			//路由脚本执行sh
-
+			if conf.Client.Type == "ws" {
+				ws.StartClient(conf.Client, globalBool)
+			} else if conf.Client.Type == "h2" {
+				h2client.StartClient(conf.Client, globalBool)
+			} else {
+				fmt.Println("请输入正确的类型")
+			}
 		} else {
 			fmt.Println("输入参数错误")
 		}
@@ -66,7 +77,10 @@ var client = &cobra.Command{
 func ExitFunc() {
 	fmt.Println("开始退出...")
 	if globalBool == true {
+		//if retract == false {
 		route.RetractRoute()
+		//}
+
 	}
 	os.Exit(0)
 }
