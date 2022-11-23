@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	h2client "zion.com/zion/conn/h2"
 	"zion.com/zion/conn/ws"
 	"zion.com/zion/route"
 )
@@ -50,23 +49,13 @@ var client = &cobra.Command{
 		}()
 
 		if globalBool == false {
-			if conf.Client.Type == "ws" {
-				ws.StartClient(conf.Client, globalBool)
-			} else if conf.Client.Type == "h2" {
-				h2client.StartClient(conf.Client, globalBool)
-			} else {
-				fmt.Println("请输入正确的类型")
-			}
+
+			ws.StartClient(conf.Client, globalBool)
 
 		} else if globalBool == true {
 
-			if conf.Client.Type == "ws" {
-				ws.StartClient(conf.Client, globalBool)
-			} else if conf.Client.Type == "h2" {
-				h2client.StartClient(conf.Client, globalBool)
-			} else {
-				fmt.Println("请输入正确的类型")
-			}
+			ws.StartClient(conf.Client, globalBool)
+
 		} else {
 			fmt.Println("输入参数错误")
 		}

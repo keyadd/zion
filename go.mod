@@ -4,6 +4,7 @@ go 1.17
 
 require (
 	github.com/gorilla/websocket v1.5.0
+	github.com/miekg/dns v1.1.26
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/spf13/cobra v1.4.0
 	github.com/spf13/viper v1.10.1

@@ -28,6 +28,16 @@ func IsIPv6(packet []byte) bool {
 	return 6 == (packet[0] >> 4)
 }
 
+func PeekSourcePort(data []byte) uint16 {
+	ihl := uint8(data[0] & 0x0f)
+	return binary.BigEndian.Uint16(data[ihl*4 : ihl*4+2])
+}
+
+func PeekDestinationPort(data []byte) uint16 {
+	ihl := uint8(data[0] & 0x0f)
+	return binary.BigEndian.Uint16(data[ihl*4+2 : ihl*4+4])
+}
+
 // IPv4Header represents an IPv4 header
 type IPv4Header []byte
 

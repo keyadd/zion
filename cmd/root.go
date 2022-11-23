@@ -50,6 +50,8 @@ func init() {
 		return
 	}
 	log.Println(conf.Server)
+
+	log.Println()
 	log.Println(conf.Client)
 	rootCmd.CompletionOptions.DisableDescriptions = true
 	rootCmd.CompletionOptions.DisableDefaultCmd = true

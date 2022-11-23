@@ -1,15 +1,14 @@
 package utils
 
 import (
-	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/sha256"
-	"encoding/base64"
+	"fmt"
 	"github.com/songgao/water/waterutil"
 	"golang.org/x/crypto/chacha20poly1305"
 	"log"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -22,25 +21,49 @@ func GetIPv4(b []byte) (srcIPv4 string, dstIPv4 string) {
 	return "", ""
 }
 
-func GetIP(b []byte) (src string, dst string) {
-
+func GetIP(b []byte) (src net.IP, dst net.IP) {
 	if IsIPv4(b) {
 		if waterutil.IPv4Protocol(b) == waterutil.TCP || waterutil.IPv4Protocol(b) == waterutil.UDP || waterutil.IPv4Protocol(b) == waterutil.ICMP {
-			src := IPv4Header(b).Src().String()
-			dst := IPv4Header(b).Dst().String()
+			src := IPv4Header(b).Src()
+			dst := IPv4Header(b).Dst()
 			return src, dst
 		}
-		return "", ""
+		return nil, nil
 	} else if IsIPv6(b) {
-		src := IPv6Header(b).Src().String()
-		dst := IPv6Header(b).Dst().String()
+		src := IPv6Header(b).Src()
+		dst := IPv6Header(b).Dst()
 		return src, dst
 	} else {
-		return "", ""
+		return nil, nil
 	}
 }
 
-func GetPhysicalInterface() (name string, gateway string, network string) {
+func GetInternalIPv6() (name string, gateway string, network string) {
+	ifaces := getAllPhysicalInterfaces()
+	if len(ifaces) == 0 {
+		return
+	}
+	netAddrs, _ := ifaces[0].Addrs()
+	for _, addr := range netAddrs {
+		ip, ok := addr.(*net.IPNet)
+		if !ok {
+			fmt.Println("error")
+		}
+		if ok && ip.IP.To4() == nil && !ip.IP.IsLoopback() {
+
+			_, ipNet, _ := net.ParseCIDR(ip.String())
+			to6 := ipNet.IP.To16()
+			network = strings.Join([]string{to6.String() + "0", strings.Split(ip.String(), "/")[1]}, "/")
+			gateway = to6.String() + "1"
+			name = ifaces[0].Name
+
+			break
+		}
+	}
+	return name, gateway, network
+}
+
+func GetInternalIPv4() (name string, gateway string, network string) {
 	ifaces := getAllPhysicalInterfaces()
 	if len(ifaces) == 0 {
 		return "", "", ""
@@ -82,7 +105,7 @@ func getAllPhysicalInterfaces() []net.Interface {
 }
 
 func isPhysicalInterface(addr string) bool {
-	prefixArray := []string{"ens", "enp", "enx", "eno", "eth", "en0", "wlan", "wlp", "wlo", "wlx", "wifi0", "lan0"}
+	prefixArray := []string{"ens", "enp", "enx", "eno", "eth", "en0", "wlan", "wlp", "wlo", "wlx", "wifi0", "lan0", "en5", "en6"}
 	for _, pref := range prefixArray {
 		if strings.HasPrefix(strings.ToLower(addr), pref) {
 			return true
@@ -117,153 +140,6 @@ func DecryptChacha1305(encrypted []byte, key string) (decrypted []byte) {
 	return decrypted
 }
 
-// =================== ECB ======================
-
-// AesEncryptECB 加密
-func AesEncryptECB(origData []byte, key []byte) (encrypted []byte) {
-	cipher, _ := aes.NewCipher(generateKey(key))
-	length := (len(origData) + aes.BlockSize) / aes.BlockSize
-	plain := make([]byte, length*aes.BlockSize)
-	copy(plain, origData)
-	pad := byte(len(plain) - len(origData))
-	for i := len(origData); i < len(plain); i++ {
-		plain[i] = pad
-	}
-	encrypted = make([]byte, len(plain))
-	// 分组分块加密
-	for bs, be := 0, cipher.BlockSize(); bs <= len(origData); bs, be = bs+cipher.BlockSize(), be+cipher.BlockSize() {
-		cipher.Encrypt(encrypted[bs:be], plain[bs:be])
-	}
-
-	return encrypted
-}
-
-// AesDecryptECB 解密
-func AesDecryptECB(encrypted []byte, key []byte) (decrypted []byte) {
-	cipher, _ := aes.NewCipher(generateKey(key))
-	decrypted = make([]byte, len(encrypted))
-	//
-	for bs, be := 0, cipher.BlockSize(); bs < len(encrypted); bs, be = bs+cipher.BlockSize(), be+cipher.BlockSize() {
-		cipher.Decrypt(decrypted[bs:be], encrypted[bs:be])
-	}
-
-	trim := 0
-	if len(decrypted) > 0 {
-		trim = len(decrypted) - int(decrypted[len(decrypted)-1])
-	}
-
-	return decrypted[:trim]
-}
-
-func generateKey(key []byte) (genKey []byte) {
-	genKey = make([]byte, 16)
-	copy(genKey, key)
-	for i := 16; i < len(key); {
-		for j := 0; j < 16 && i < len(key); j, i = j+1, i+1 {
-			genKey[j] ^= key[i]
-		}
-	}
-	return genKey
-}
-
-// =================== CBC ======================
-
-const (
-	sKey        = "1234567890000000"
-	ivParameter = "dde4b1f8a9e6b814"
-)
-
-var Data string
-
-// PswEncrypt 加密
-func PswEncrypt(src []byte) []byte {
-	key := []byte(sKey)
-	iv := []byte(ivParameter)
-
-	result, err := Aes128Encrypt(src, key, iv)
-	if err != nil {
-		log.Println(err)
-		return nil
-	}
-	return []byte(base64.RawStdEncoding.EncodeToString(result))
-}
-
-// PswDecrypt 解密
-func PswDecrypt(src []byte) []byte {
-
-	key := []byte(sKey)
-	iv := []byte(ivParameter)
-
-	var result []byte
-	var err error
-
-	result, err = base64.RawStdEncoding.DecodeString(string(src))
-	if err != nil {
-		log.Println(err)
-		return nil
-	}
-	origData, err := Aes128Decrypt(result, key, iv)
-	if err != nil {
-		log.Println(err)
-		return nil
-	}
-	return origData
-
-}
-func Aes128Encrypt(origData, key []byte, IV []byte) ([]byte, error) {
-	if key == nil || len(key) != 16 {
-		return nil, nil
-	}
-	if IV != nil && len(IV) != 16 {
-		return nil, nil
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	blockSize := block.BlockSize()
-	origData = PKCS5Padding(origData, blockSize)
-	blockMode := cipher.NewCBCEncrypter(block, IV[:blockSize])
-	crypted := make([]byte, len(origData))
-	// 根据CryptBlocks方法的说明，如下方式初始化crypted也可以
-	blockMode.CryptBlocks(crypted, origData)
-	return crypted, nil
-}
-
-func Aes128Decrypt(crypted, key []byte, IV []byte) ([]byte, error) {
-	if key == nil || len(key) != 16 {
-		return nil, nil
-	}
-	if IV != nil && len(IV) != 16 {
-		return nil, nil
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	blockSize := block.BlockSize()
-	blockMode := cipher.NewCBCDecrypter(block, IV[:blockSize])
-	origData := make([]byte, len(crypted))
-	blockMode.CryptBlocks(origData, crypted)
-	origData = PKCS5UnPadding(origData)
-	return origData, nil
-}
-
-func PKCS5Padding(ciphertext []byte, blockSize int) []byte {
-	padding := blockSize - len(ciphertext)%blockSize
-	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
-	return append(ciphertext, padtext...)
-}
-
-func PKCS5UnPadding(origData []byte) []byte {
-	length := len(origData)
-	// 去掉最后一个字节 unpadding 次
-	unpadding := int(origData[length-1])
-	return origData[:(length - unpadding)]
-}
-
 func IsIP(ip string) bool {
 	if strings.Contains(ip, "/") {
 		netIP, _, err := net.ParseCIDR(ip)
@@ -277,4 +153,34 @@ func IsIP(ip string) bool {
 		return false
 	}
 	return netIP.To4() != nil
+}
+
+func RunCmd(c string, args ...string) {
+	//log.Printf("exec cmd: %v %v:", c, args)
+	cmd := exec.Command(c, args...)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	cmd.Stdin = os.Stdin
+	err := cmd.Run()
+	if err != nil {
+		log.Println("failed to exec cmd:", err)
+	}
+}
+
+func IsIPv4Bool(ip net.IP) bool {
+	if ip.To4() != nil {
+		return true
+	}
+	return false
+}
+
+func IsIPv6Bool(ip net.IP) bool {
+	// To16() also valid for ipv4, ensure it's not an ipv4 address
+	if ip.To4() != nil {
+		return false
+	}
+	if ip.To16() != nil {
+		return true
+	}
+	return false
 }
