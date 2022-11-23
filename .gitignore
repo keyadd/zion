@@ -1,3 +1,5 @@
-config.yaml
+.gitignore
 zion
 zion-linux
+main
+zion.log

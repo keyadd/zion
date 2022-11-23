@@ -1,0 +1,42 @@
+
+
+
+client:
+  name: "utun63"                                                    #虚拟网卡名称  可以不修改
+  v4Addr: "172.16.0.7/24"                                           #虚拟网卡ipv4
+  v6Addr: "fd42:42:42::7/64"                                        #虚拟网卡ipv6
+  dns: "8.8.8.8"                                                    #dns 建议 8.8.8.8
+  #addr: "vtun.acornio.com"
+  #addr: "appapp.etshfw.cn"                                           #"appapp.etshfw.cn"  #"tun.acornio.com"   #连接域名 192.168.1.184:3000  192.168.1.186  dbvo4mkfkamf9.cloudfront.net
+  addr: "ziona.acorn.eu.org"                                           #"appapp.etshfw.cn"  #"tun.acornio.com"   #连接域名 192.168.1.184:3000  192.168.1.186  dbvo4mkfkamf9.cloudfront.net
+  path: "/app"                                                      #连接站点路经
+  uuid: "1a8052dc-a7d4-41b7-83ef-bf4e71bce52b"                      #客户端唯一id 验证用户身份
+  key: "ABCDEFGHIJKLMNOP"                                           #连接的key  uuid
+  tls: true                                                         #连接是否开启https ||开启 true ||关闭 false
+  encrypt: false                                                    #AES-128-CBC 加密算法
+
+
+
+
+#服务端配置
+server:
+  user:
+    1:
+      uuid: "1a8052dc-a7d4-41b7-83ef-bf4e71bce52e"        #客户端唯一id 验证用户身份
+      v4: "172.16.0.8/24"                                 #对应客户端ipv4 地址
+      v6: "fd42:42:42::6/64"                              #对应客户端ipv6 地址
+      key: "ABCDEFGHIJKLMNOP"                             #字符串是二次对称加密的密钥
+    2:
+      uuid: "1a8052dc-a7d4-41b7-83ef-bf4e71bce52b"        #客户端唯一id 验证用户身份
+      v4: "172.16.0.7/24"                                 #对应客户端ipv4 地址 不要和其他用户公用一个ip
+      v6: "fd42:42:42::7/64"                              #对应客户端ipv6 地址
+      key: "ABCDEFGHIJKLMNOP"                             #字符串是二次对称加密的密钥
+
+  name: "utun77"                                          #虚拟网卡名称
+  v4Addr: "172.16.0.1/24"                                 #虚拟网卡ip
+  v6Addr: "fd42:42:42::1/64"                              #虚拟网卡ip
+  dns: "8.8.8.8"                                          #dns 建议 8.8.8.8
+  path: "/app"                                            #站点目录
+  port: "0.0.0.0:3000"                                    #监听的zion服务端口
+
+
